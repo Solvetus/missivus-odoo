@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: 2026 Solvetus
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# Throwaway local environment only. Never point this at production.
+#   docker compose -f docker-compose.dev.yml up -d
+#   docker compose -f docker-compose.dev.yml exec odoo odoo -d missivus_dev -i missivus_mail_graph --stop-after-init
+# then open http://localhost:8069 (db missivus_dev, admin / admin).
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: odoo
+      POSTGRES_DB: postgres
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+  odoo:
+    image: odoo:19
+    depends_on:
+      - db
+    ports:
+      - "8069:8069"
+    environment:
+      HOST: db
+      USER: odoo
+      PASSWORD: odoo
+    volumes:
+      - ./:/mnt/extra-addons
+      - odoo-data:/var/lib/odoo
+    command: odoo --dev=reload,xml
+
+volumes:
+  db-data:
+  odoo-data:

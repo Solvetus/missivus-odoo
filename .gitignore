@@ -1,0 +1,25 @@
+# Never commit credentials. Secrets live in the Odoo database (client secret field)
+# or outside the repo entirely.
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+*.cer
+.env
+.env.*
+odoo.conf
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.ruff_cache/
+.pytest_cache/
+
+# Odoo / local dev
+filestore/
+sessions/
+*.log
+.DS_Store
