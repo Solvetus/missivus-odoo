@@ -4,6 +4,37 @@ All notable changes to Missivus for Odoo. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] — Unreleased
+
+Inbound mail. The addon is now the complete mail story for Odoo 19 Community on Microsoft 365:
+send and receive through Microsoft Graph with application permissions and shared mailboxes.
+
+### Added
+
+- "Missivus — Microsoft Graph" server type on Incoming Mail Servers: fetches unread mail from a
+  shared mailbox folder through Graph and hands the raw MIME to Odoo's native `message_process`
+  (aliases, threading, catchall and bounce handling unchanged). Rides Odoo's existing fetchmail
+  cron — no new cron, no relay, no extra dependency.
+- Post-processing modes: mark as read (default) or move to a named folder (created on demand).
+  Batch cap per run (default 50).
+- Quarantine: a message Odoo cannot process is moved to the "Missivus Quarantine" folder
+  (created on first use) and logged with its Graph message id and the exception class — never
+  its content. The run continues with the remaining messages; a failed quarantine move leaves
+  the message in place for the next run.
+- Transient Graph/network errors abort the run cleanly; unprocessed messages stay unread.
+- Graph client: list unread, fetch raw MIME, mark read, move, resolve/ensure folder, sharing
+  the token cache, the 401 re-acquire and the error taxonomy of the send path.
+- README: inbound walkthrough, `Mail.ReadWrite` application permission, and a troubleshooting
+  section (alias domain / default From on Odoo 17+, `ErrorSendAsDenied`,
+  `Test-ApplicationAccessPolicy`).
+
+### Changed
+
+- The four app-registration fields, their validation and the token test moved to a shared
+  `missivus.graph.mixin` used by both Outgoing and Incoming Mail Servers. Field names and DB
+  columns are unchanged — no migration.
+- Manifest version 19.0.0.2.0.
+
 ## [0.1.0] — 2026-08-25
 
 First release. The fifth Missivus platform, after
