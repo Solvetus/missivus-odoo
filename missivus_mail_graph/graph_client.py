@@ -9,6 +9,7 @@ mail.mail.failure_reason and on screen.
 
 import base64
 import logging
+import re
 import threading
 import time
 from urllib.parse import quote
@@ -23,6 +24,9 @@ SCOPE = "https://graph.microsoft.com/.default"
 TOKEN_EXPIRY_MARGIN = 120  # seconds subtracted from expires_in before a cached token is reused
 MAX_PAYLOAD_BYTES = 4 * 1024 * 1024  # Graph caps the sendMail request body (base64 MIME) at 4 MB
 TIMEOUT = (10, 60)  # (connect, read) seconds
+# A token that is not header-safe must never reach a request: requests/http.client echo a
+# malformed Authorization value verbatim in their exception text.
+TOKEN_SHAPE = re.compile(r"[A-Za-z0-9._~+/=-]+")
 
 # (tenant_id, client_id) -> (access_token, expires_at as time.time())
 _token_cache: dict[tuple[str, str], tuple[str, float]] = {}
@@ -86,40 +90,50 @@ def _post(url, **kwargs):
 
 
 def get_token(tenant_id, client_id, client_secret, force_refresh=False):
-    """Return a bearer token for Graph, from cache while more than TOKEN_EXPIRY_MARGIN remains."""
+    """Return a bearer token for Graph, from cache while more than TOKEN_EXPIRY_MARGIN remains.
+
+    The lock only guards the cache dict; the HTTP round trip runs outside it so one slow token
+    fetch never stalls every other sending thread. A redundant concurrent fetch just stores an
+    equally valid token.
+    """
     key = (tenant_id, client_id)
-    with _token_lock:
-        if not force_refresh:
+    if not force_refresh:
+        with _token_lock:
             cached = _token_cache.get(key)
-            if cached and cached[1] - TOKEN_EXPIRY_MARGIN > time.time():
-                return cached[0]
-        resp = _post(
-            TOKEN_URL.format(tenant_id=tenant_id),
-            data={
-                "grant_type": "client_credentials",
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "scope": SCOPE,
-            },
+        if cached and cached[1] - TOKEN_EXPIRY_MARGIN > time.time():
+            return cached[0]
+    resp = _post(
+        TOKEN_URL.format(tenant_id=tenant_id),
+        data={
+            "grant_type": "client_credentials",
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "scope": SCOPE,
+        },
+    )
+    body = _json(resp)
+    if resp.status_code >= 500:
+        raise TransientDeliveryError(
+            f"Microsoft login returned HTTP {resp.status_code}",
+            status=resp.status_code,
+            retry_after=_retry_after(resp),
         )
-        body = _json(resp)
-        if resp.status_code >= 500:
-            raise TransientDeliveryError(
-                f"Microsoft login returned HTTP {resp.status_code}",
-                status=resp.status_code,
-                retry_after=_retry_after(resp),
-            )
-        token = body.get("access_token")
-        if resp.status_code != 200 or not token:
-            error = body.get("error", "unknown_error")
-            description = body.get("error_description") or resp.text[:500]
-            raise TokenError(
-                f"Token request failed (HTTP {resp.status_code}): {error}: {description}",
-                status=resp.status_code,
-                code=error,
-            )
+    token = body.get("access_token")
+    if resp.status_code != 200 or not token:
+        error = body.get("error", "unknown_error")
+        description = body.get("error_description") or resp.text[:500]
+        raise TokenError(
+            f"Token request failed (HTTP {resp.status_code}): {error}: {description}",
+            status=resp.status_code,
+            code=error,
+        )
+    if not isinstance(token, str) or not TOKEN_SHAPE.fullmatch(token):
+        raise TokenError(
+            "Microsoft Entra returned a malformed access token", status=resp.status_code
+        )
+    with _token_lock:
         _token_cache[key] = (token, time.time() + int(body.get("expires_in", 3600)))
-        return token
+    return token
 
 
 def _post_sendmail(sender, encoded, token):

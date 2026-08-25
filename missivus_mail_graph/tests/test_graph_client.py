@@ -62,6 +62,13 @@ class TestToken(TransactionCase):
         self.assertNotIn(CREDS["client_secret"], text)
         self.assertIsInstance(cm.exception, PermanentDeliveryError)
 
+    def test_malformed_token_is_rejected_and_never_echoed(self):
+        with GraphPostMock(token_ok(token="AAA.SECRET\rX")):
+            with self.assertRaises(TokenError) as cm:
+                graph_client.get_token(**CREDS)
+        self.assertNotIn("SECRET", str(cm.exception))
+        self.assertIn("malformed", str(cm.exception))
+
     def test_token_network_error_is_transient(self):
         with GraphPostMock(requests.ConnectionError("boom")):
             with self.assertRaises(TransientDeliveryError) as cm:
