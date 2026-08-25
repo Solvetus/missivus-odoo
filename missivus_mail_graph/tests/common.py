@@ -137,3 +137,16 @@ def create_graph_server(env, **vals):
     }
     values.update(vals)
     return env["ir.mail_server"].create(values)
+
+
+def create_graph_fetch_server(env, **vals):
+    values = {
+        "name": "Missivus Graph inbound",
+        "server_type": "missivus_graph",
+        "missivus_tenant_id": CREDS["tenant_id"],
+        "missivus_client_id": CREDS["client_id"],
+        "missivus_client_secret": CREDS["client_secret"],
+        "missivus_sender": MAILBOX,
+    }
+    values.update(vals)
+    return env["fetchmail.server"].create(values)

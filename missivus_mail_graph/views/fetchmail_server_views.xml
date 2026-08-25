@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+SPDX-FileCopyrightText: 2026 Solvetus
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
+<odoo>
+    <record id="fetchmail_server_view_form_missivus" model="ir.ui.view">
+        <field name="name">fetchmail.server.view.form.inherit.missivus_mail_graph</field>
+        <field name="model">fetchmail.server</field>
+        <field name="inherit_id" ref="mail.view_email_server_form"/>
+        <field name="priority">1000</field>
+        <field name="arch" type="xml">
+            <!-- core's groups carry no name; select them through their fields -->
+            <xpath expr="//field[@name='server']/.." position="attributes">
+                <attribute name="invisible">server_type in ('local', 'missivus_graph')</attribute>
+            </xpath>
+            <xpath expr="//field[@name='user']/.." position="attributes">
+                <attribute name="invisible">server_type in ('local', 'missivus_graph')</attribute>
+            </xpath>
+            <xpath expr="//field[@name='server']" position="attributes">
+                <attribute name="required">server_type not in ('local', 'missivus_graph')</attribute>
+            </xpath>
+            <xpath expr="//field[@name='port']" position="attributes">
+                <attribute name="required">server_type not in ('local', 'missivus_graph')</attribute>
+            </xpath>
+            <xpath expr="//field[@name='user']" position="attributes">
+                <attribute name="required">server_type not in ('local', 'missivus_graph')</attribute>
+            </xpath>
+            <xpath expr="//field[@name='server']/.." position="before">
+                <group string="Microsoft Graph" name="missivus_graph"
+                       invisible="server_type != 'missivus_graph'">
+                    <field name="missivus_tenant_id" readonly="state != 'draft'"
+                           required="server_type == 'missivus_graph'"
+                           placeholder="00000000-0000-0000-0000-000000000000"/>
+                    <field name="missivus_client_id" readonly="state != 'draft'"
+                           required="server_type == 'missivus_graph'"
+                           placeholder="00000000-0000-0000-0000-000000000000"/>
+                    <field name="missivus_client_secret" password="True" readonly="state != 'draft'"
+                           required="server_type == 'missivus_graph'"/>
+                    <field name="missivus_sender" readonly="state != 'draft'"
+                           required="server_type == 'missivus_graph'"
+                           placeholder="inbox@example.com"/>
+                </group>
+                <group string="Fetching" name="missivus_fetch"
+                       invisible="server_type != 'missivus_graph'">
+                    <field name="missivus_folder" required="server_type == 'missivus_graph'"/>
+                    <field name="missivus_post_process"/>
+                    <field name="missivus_move_folder"
+                           invisible="missivus_post_process != 'move'"
+                           required="server_type == 'missivus_graph' and missivus_post_process == 'move'"/>
+                    <field name="missivus_batch_cap"/>
+                </group>
+            </xpath>
+        </field>
+    </record>
+</odoo>
