@@ -8,6 +8,7 @@ import requests
 from .. import graph_client
 
 POST_TARGET = "odoo.addons.missivus_mail_graph.graph_client.requests.post"
+REQUEST_TARGET = "odoo.addons.missivus_mail_graph.graph_client.requests.request"
 
 CREDS = {
     "tenant_id": "11111111-1111-1111-1111-111111111111",
@@ -15,6 +16,9 @@ CREDS = {
     "client_secret": "s3cr3t-value-never-logged",
 }
 SENDER = "noreply@example.com"
+MAILBOX = "inbox@example.com"
+FOLDER_ID = "AAMkAGI2folder="
+QUARANTINE_ID = "AAMkAGI2quarantine="
 
 
 def response(status, body=None, headers=None):
@@ -49,6 +53,27 @@ def graph_error(status, code, message, headers=None):
 ACCEPTED = response(202)
 
 
+def graph_json(body, status=200):
+    return response(status, body)
+
+
+def mime_response(raw, status=200):
+    resp = requests.Response()
+    resp.status_code = status
+    resp._content = raw
+    resp.headers["Content-Type"] = "message/rfc822"
+    return resp
+
+
+def folder_list(*items):
+    """items: (id, displayName) pairs -> a mailFolders collection response."""
+    return graph_json({"value": [{"id": i, "displayName": n} for i, n in items]})
+
+
+def message_list(*ids):
+    return graph_json({"value": [{"id": i} for i in ids]})
+
+
 class GraphPostMock:
     """Context manager: patches requests.post with a scripted list of responses/exceptions.
 
@@ -59,21 +84,32 @@ class GraphPostMock:
         self.script = list(script)
         self.calls = []
         self._patcher = patch(POST_TARGET, side_effect=self._post)
+        # Mailbox calls (inbound) go through requests.request; token + sendMail keep requests.post
+        self._request_patcher = patch(REQUEST_TARGET, side_effect=self._request)
 
-    def _post(self, url, **kwargs):
-        self.calls.append((url, kwargs))
+    def _next(self):
         item = self.script.pop(0)
         if isinstance(item, Exception):
             raise item
         return item
 
+    def _post(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return self._next()
+
+    def _request(self, method, url, **kwargs):
+        self.calls.append((url, dict(kwargs, method=method)))
+        return self._next()
+
     def __enter__(self):
         graph_client.clear_token_cache()
         self._patcher.start()
+        self._request_patcher.start()
         return self
 
     def __exit__(self, *exc):
         self._patcher.stop()
+        self._request_patcher.stop()
         graph_client.clear_token_cache()
         return False
 
@@ -84,6 +120,10 @@ class GraphPostMock:
     @property
     def send_calls(self):
         return [c for c in self.calls if "/sendMail" in c[0]]
+
+    @property
+    def mailbox_calls(self):
+        return [c for c in self.calls if "method" in c[1]]
 
 
 def create_graph_server(env, **vals):

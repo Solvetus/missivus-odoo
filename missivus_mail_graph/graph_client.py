@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Solvetus
 # SPDX-License-Identifier: LGPL-3.0-or-later
-"""Microsoft Graph client for Missivus: client-credentials token + raw-MIME sendMail.
+"""Microsoft Graph client for Missivus: client-credentials token, raw-MIME sendMail and the
+mailbox read/move calls used for inbound fetching.
 
 Deliberately Odoo-free so it is unit-testable with plain mocks. Error text built here must never
-contain the client secret, the bearer token or the MIME body: it ends up in
-mail.mail.failure_reason and on screen.
+contain the client secret, the bearer token or a MIME body (sent or fetched): it ends up in
+mail.mail.failure_reason, in fetchmail.server.error_message, in logs and on screen. Fetched
+messages are only ever named by their Graph message id.
 """
 
 import base64
@@ -20,6 +22,11 @@ _logger = logging.getLogger(__name__)
 
 TOKEN_URL = "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
 SENDMAIL_URL = "https://graph.microsoft.com/v1.0/users/{sender}/sendMail"
+GRAPH_BASE = "https://graph.microsoft.com/v1.0/users/{mailbox}"
+QUARANTINE_FOLDER = "Missivus Quarantine"
+WELL_KNOWN_FOLDERS = frozenset(
+    {"inbox", "archive", "drafts", "junkemail", "deleteditems", "sentitems", "outbox"}
+)
 SCOPE = "https://graph.microsoft.com/.default"
 TOKEN_EXPIRY_MARGIN = 120  # seconds subtracted from expires_in before a cached token is reused
 MAX_PAYLOAD_BYTES = 4 * 1024 * 1024  # Graph caps the sendMail request body (base64 MIME) at 4 MB
@@ -56,6 +63,14 @@ class TransientDeliveryError(GraphError):
     def __init__(self, message, status=None, code=None, retry_after=None):
         super().__init__(message, status=status, code=code)
         self.retry_after = retry_after
+
+
+class NotFoundError(PermanentDeliveryError):
+    """Graph returned 404 for a message: it was deleted or moved between list and fetch."""
+
+
+class FolderNotFoundError(PermanentDeliveryError):
+    """The configured folder does not exist in the mailbox (configuration error)."""
 
 
 def clear_token_cache():
@@ -174,3 +189,167 @@ def send_raw_mime(sender, raw_bytes, tenant_id, client_id, client_secret):
         token = get_token(tenant_id, client_id, client_secret, force_refresh=True)
         resp = _post_sendmail(sender, encoded, token)
     _raise_for_graph_status(resp)
+
+
+# ----------------------------------------------------------------------------------------------
+# Mailbox read/write (inbound). Same token cache, same 401 refresh-once, same error taxonomy.
+# Fetched mail bodies never enter error text or logs: only Graph message ids do.
+# ----------------------------------------------------------------------------------------------
+
+
+def _request(method, url, token, **kwargs):
+    headers = {"Authorization": f"Bearer {token}", **kwargs.pop("headers", {})}
+    try:
+        return requests.request(method, url, headers=headers, timeout=TIMEOUT, **kwargs)
+    except requests.RequestException as exc:
+        host = url.split("/")[2]
+        raise TransientDeliveryError(
+            f"Could not reach {host}: {exc.__class__.__name__}: {exc}"
+        ) from exc
+
+
+def _graph_call(method, url, creds, *, what, ok=(200, 201, 202, 204), **kwargs):
+    """One authenticated Graph call with a single token re-acquire on 401.
+
+    `creds` is (tenant_id, client_id, client_secret); `what` names the operation and the
+    message/folder id for error text (never a body).
+    """
+    token = get_token(*creds)
+    resp = _request(method, url, token, **kwargs)
+    if resp.status_code == 401:
+        _logger.info("Graph returned 401 for %s; re-acquiring token once", what)
+        token = get_token(*creds, force_refresh=True)
+        resp = _request(method, url, token, **kwargs)
+    if resp.status_code in ok:
+        return resp
+    error = _json(resp).get("error")
+    error = error if isinstance(error, dict) else {}
+    code = error.get("code") or "unknown"
+    message = error.get("message") or str(resp.reason)
+    text = f"Microsoft Graph {what} failed (HTTP {resp.status_code} {code}): {message}"
+    if resp.status_code == 429 or resp.status_code >= 500:
+        raise TransientDeliveryError(
+            text, status=resp.status_code, code=code, retry_after=_retry_after(resp)
+        )
+    if resp.status_code == 404:
+        raise NotFoundError(text, status=404, code=code)
+    raise PermanentDeliveryError(text, status=resp.status_code, code=code)
+
+
+def _base(mailbox):
+    return GRAPH_BASE.format(mailbox=quote(mailbox, safe=""))
+
+
+def list_unread_message_ids(mailbox, folder_id, top, tenant_id, client_id, client_secret):
+    """Ids of up to `top` unread messages in `folder_id`.
+
+    No $orderby: Graph rejects $filter + $orderby on messages as InefficientFilter, and order is
+    irrelevant since every unread message is fetched eventually.
+    """
+    resp = _graph_call(
+        "GET",
+        f"{_base(mailbox)}/mailFolders/{quote(folder_id, safe='')}/messages",
+        (tenant_id, client_id, client_secret),
+        what=f"list unread in folder {folder_id}",
+        params={"$filter": "isRead eq false", "$select": "id", "$top": top},
+    )
+    return [item["id"] for item in _json(resp).get("value", []) if item.get("id")]
+
+
+def fetch_raw_mime(mailbox, message_id, tenant_id, client_id, client_secret):
+    """The RFC 2822 source of one message, as bytes."""
+    resp = _graph_call(
+        "GET",
+        f"{_base(mailbox)}/messages/{quote(message_id, safe='')}/$value",
+        (tenant_id, client_id, client_secret),
+        what=f"fetch message {message_id}",
+    )
+    return resp.content
+
+
+def mark_read(mailbox, message_id, tenant_id, client_id, client_secret):
+    _graph_call(
+        "PATCH",
+        f"{_base(mailbox)}/messages/{quote(message_id, safe='')}",
+        (tenant_id, client_id, client_secret),
+        what=f"mark read message {message_id}",
+        json={"isRead": True},
+    )
+
+
+def move_message(mailbox, message_id, folder_id, tenant_id, client_id, client_secret):
+    _graph_call(
+        "POST",
+        f"{_base(mailbox)}/messages/{quote(message_id, safe='')}/move",
+        (tenant_id, client_id, client_secret),
+        what=f"move message {message_id}",
+        json={"destinationId": folder_id},
+    )
+
+
+def _find_folder_by_name(mailbox, name, creds):
+    escaped = name.replace("'", "''")
+    resp = _graph_call(
+        "GET",
+        f"{_base(mailbox)}/mailFolders",
+        creds,
+        what=f"find folder '{name}'",
+        params={"$filter": f"displayName eq '{escaped}'", "$select": "id,displayName"},
+    )
+    for item in _json(resp).get("value", []):
+        if item.get("id"):
+            return item["id"]
+    return None
+
+
+def resolve_folder(mailbox, name, tenant_id, client_id, client_secret):
+    """Folder id for a well-known name (inbox, archive, ...) or a folder's displayName.
+
+    Not cached across runs: folders can be renamed. Callers resolve once per run.
+    """
+    creds = (tenant_id, client_id, client_secret)
+    key = name.strip()
+    if key.lower() in WELL_KNOWN_FOLDERS:
+        try:
+            resp = _graph_call(
+                "GET",
+                f"{_base(mailbox)}/mailFolders/{key.lower()}",
+                creds,
+                what=f"resolve folder '{key}'",
+                params={"$select": "id"},
+            )
+        except NotFoundError as exc:
+            raise FolderNotFoundError(str(exc), status=404, code=exc.code) from exc
+        return _json(resp)["id"]
+    folder_id = _find_folder_by_name(mailbox, key, creds)
+    if not folder_id:
+        raise FolderNotFoundError(f"Mail folder '{key}' not found in mailbox {mailbox}")
+    return folder_id
+
+
+def ensure_folder(mailbox, name, tenant_id, client_id, client_secret):
+    """Folder id by displayName, creating it when missing.
+
+    Safe under two concurrent workers: a create that loses the race (409) re-resolves instead of
+    failing.
+    """
+    creds = (tenant_id, client_id, client_secret)
+    folder_id = _find_folder_by_name(mailbox, name, creds)
+    if folder_id:
+        return folder_id
+    try:
+        resp = _graph_call(
+            "POST",
+            f"{_base(mailbox)}/mailFolders",
+            creds,
+            what=f"create folder '{name}'",
+            json={"displayName": name},
+        )
+    except PermanentDeliveryError as exc:
+        if exc.status != 409:
+            raise
+        folder_id = _find_folder_by_name(mailbox, name, creds)
+        if not folder_id:
+            raise
+        return folder_id
+    return _json(resp)["id"]
