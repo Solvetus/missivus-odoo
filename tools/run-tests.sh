@@ -14,6 +14,9 @@ DB_PORT="${DB_PORT:-5432}"
 DB_USER="${DB_USER:-odoo}"
 DB_PASSWORD="${DB_PASSWORD:-odoo}"
 export PGPASSWORD="$DB_PASSWORD"
+# A running dev server may still hold sessions on the test database: end them, then drop it.
+psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d postgres -q -c \
+  "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid();" >/dev/null
 dropdb --if-exists -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" "$DB_NAME"
 exec odoo \
   -d "$DB_NAME" \
