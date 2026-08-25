@@ -226,7 +226,7 @@ Throwaway local environment (never point it at production):
 
 ```sh
 docker compose -f docker-compose.dev.yml up -d
-docker compose -f docker-compose.dev.yml exec odoo odoo -d missivus_dev -i missivus_mail_graph --stop-after-init
+docker compose -f docker-compose.dev.yml run --rm odoo odoo -d missivus_dev -i missivus_mail_graph --stop-after-init
 ```
 
 Then open <http://localhost:8069>, database `missivus_dev`, login `admin` / `admin`. The repo

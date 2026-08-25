@@ -3,7 +3,7 @@
 #
 # Throwaway local environment only. Never point this at production.
 #   docker compose -f docker-compose.dev.yml up -d
-#   docker compose -f docker-compose.dev.yml exec odoo odoo -d missivus_dev -i missivus_mail_graph --stop-after-init
+#   docker compose -f docker-compose.dev.yml run --rm odoo odoo -d missivus_dev -i missivus_mail_graph --stop-after-init
 # then open http://localhost:8069 (db missivus_dev, admin / admin).
 
 services:
