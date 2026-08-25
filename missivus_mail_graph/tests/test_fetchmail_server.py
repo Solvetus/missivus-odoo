@@ -348,3 +348,25 @@ class TestFetchLoop(TransactionCase):
             exc = imap.with_env(imap.env(cr=cr))._fetch_mail()
         self.assertIsInstance(exc, OSError)
         self.assertEqual(post.calls, [])
+
+    def test_no_body_secret_or_token_in_any_log(self):
+        # Every failure branch in one run: processing failure + quarantine create, quarantine
+        # move failure, 404 between list and fetch, permanent post-process failure.
+        self.process.side_effect = [ValueError("boom"), 1]
+        with self.assertLogs("odoo.addons.missivus_mail_graph", level=logging.DEBUG) as logs:
+            _, _post, state = self._run(
+                token_ok(token="tok-1"),
+                self._inbox(),
+                message_list("m1", "m2", "m3"),
+                mime_response(RAW1),
+                folder_list(),
+                graph_json({"id": QUARANTINE_ID}, status=201),
+                graph_error(403, "ErrorAccessDenied", "denied"),
+                graph_error(404, "ErrorItemNotFound", "gone"),
+                mime_response(RAW2),
+                graph_error(400, "ErrorInvalidRequest", "bad patch"),
+            )
+        text = "\n".join(logs.output) + (state["error_message"] or "")
+        self.assertIn("m1", text)  # the guard must have seen the failure branches
+        for forbidden in ("SECRET-BODY-1", "SECRET-BODY-2", CREDS["client_secret"], "tok-1"):
+            self.assertNotIn(forbidden, text)
