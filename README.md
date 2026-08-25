@@ -271,7 +271,9 @@ migration, then put them back.
 | `AADSTS900023` / `AADSTS90002` | Wrong or mistyped Directory (tenant) ID |
 | `AADSTS700016` | Wrong Application (client) ID |
 | `ErrorAccessDenied` | The access policy does not cover this mailbox, or admin consent was never granted |
-| `ErrorSendAsDenied` | The From address is not the shared mailbox — see Odoo side, step 4 |
+| `ErrorSendAsDenied` | The From address is not the shared mailbox — see Troubleshooting 2 |
+| `ErrorAccessDenied` on an incoming server | The access policy does not cover the fetched mailbox — see Troubleshooting 3 |
+| `Mail folder 'X' not found` | Wrong folder name on the incoming server; use a well-known name or the exact display name |
 | `MailboxNotEnabledForRESTAPI` | The sender address is not a real Exchange Online mailbox |
 | "mailbox is either inactive, soft-deleted…" | The mailbox has not finished provisioning — wait and retry |
 | `message too large for Graph sendMail; reduce attachments` | Over the 4 MB request cap — use **Detect Max Limit** or send fewer/lighter attachments |
@@ -280,16 +282,69 @@ migration, then put them back.
 Secrets are never part of any error text, so these messages are safe to paste into an issue — but
 do read them over first.
 
+## Troubleshooting
+
+### 1. Mail is sent from the wrong address — `mail.default.from` is ignored
+
+**Symptom.** Outgoing mail fails with `ErrorSendAsDenied`, or goes out `From:` a user's address
+instead of the shared mailbox, even though you set the system parameter `mail.default.from`.
+
+**Why.** Since Odoo 17 the notification/default From address comes from the **Alias Domain**
+record, not from the legacy `mail.default.from` system parameter — that parameter is read by
+nothing any more. Without an alias domain whose default-from is the shared mailbox, Odoo keeps the
+author's address as From, the Graph server's FROM Filtering does not match, and Graph refuses to
+send as an address the app is not allowed to use.
+
+**Fix.**
+1. Settings → General Settings → Discuss → **Alias Domain** (developer mode on; or Technical →
+   Email → Alias Domains). Create or open the domain, e.g. `example.com`.
+2. Set **Default From Alias** to `noreply` (or the full `noreply@example.com`) — the shared
+   mailbox from Part 4. Save.
+3. On the Outgoing Mail Server, confirm *FROM Filtering* reads `noreply@example.com`.
+4. Send a real test (Odoo side, step 5). The message now goes out as
+   `"Author via Company" <noreply@example.com>`.
+
+### 2. `ErrorSendAsDenied`
+
+Graph refused to send because the message's From is not the mailbox the app may send as.
+
+| Cause | Fix |
+| --- | --- |
+| No alias domain / default From not the shared mailbox (Odoo 17+) | Troubleshooting 1 above |
+| *FROM Filtering* on the server was edited to a bare domain or another address | Set *Shared mailbox* again; FROM Filtering follows it on save |
+| A second outgoing server with a broader FROM Filtering catches the mail first | Give the Graph server the lowest *Priority* number, or narrow the other server's filter |
+| The shared mailbox is not in the access-policy group | Part 5; check with `Test-ApplicationAccessPolicy` (3 below) |
+| A custom module sets `email_from` and a forced `mail_server_id` | Either use the shared mailbox as From, or let Odoo rewrite it by not forcing the server |
+
+### 3. Verifying the access policy
+
+Run in Exchange Online PowerShell (`Connect-ExchangeOnline` first):
+
+```powershell
+Test-ApplicationAccessPolicy -Identity "noreply@example.com" -AppId "PASTE-APPLICATION-CLIENT-ID"
+Test-ApplicationAccessPolicy -Identity "inbox@example.com"   -AppId "PASTE-APPLICATION-CLIENT-ID"
+Test-ApplicationAccessPolicy -Identity "someone@example.com" -AppId "PASTE-APPLICATION-CLIENT-ID"
+```
+
+Expected: **Granted** for every mailbox the app sends as or fetches from, **Denied** for
+everyone else. `Granted` everywhere means no policy applies to this app yet (or it is still
+propagating — up to 30 minutes). `Denied` for a mailbox you fetch from shows as
+`ErrorAccessDenied` in the incoming server's *Last Error*; add that mailbox to the policy's
+group and re-test.
+
 ## Limitations
 
-- **Outbound only.** Incoming mail, aliases, catchall and bounce handling stay on Odoo's native
-  mechanisms (incoming mail servers, mail gateway). Bounces are delivered to the shared mailbox,
-  not to Odoo's bounce alias, unless you fetch that mailbox.
-- **~4 MB per message** (Graph `sendMail` request cap, base64 included). Upload sessions for
-  larger attachments are future work; until then use *Detect Max Limit* so Odoo sends links.
+- **Inbound reads unread mail only.** A message that is already read in the mailbox is never
+  imported. To re-import, mark it unread.
+- **One folder per incoming server record.** Add another record for another folder or another
+  mailbox. Each record shares the same app registration if you like.
+- **`Mail.ReadWrite` is required for inbound** (quarantine and mark-as-read are writes); a
+  `Mail.Read`-only mode is deliberately not offered.
+- **~4 MB per outgoing message** (Graph `sendMail` request cap, base64 included). Upload sessions
+  for larger attachments are future work; until then use *Detect Max Limit* so Odoo sends links.
 - **Odoo 19 only** (see below).
 - **Client secret only.** Certificate credentials are future work.
-- One shared mailbox per server record. Add another record for another mailbox.
+- One shared mailbox per outgoing server record. Add another record for another mailbox.
 
 ## Odoo 18 support (not implemented)
 
