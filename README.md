@@ -352,7 +352,7 @@ The delta is wiring, not logic. Odoo 18 names the hooks `connect()`, `build_emai
 `_prepare_email_message()` and `_smtp_login()`; Odoo 19 renamed them `_connect__`,
 `_build_email__`, `_prepare_email_message__` and `_smtp_login__`, which is what this addon
 overrides. `models.Constraint` does not exist in 18 (`_sql_constraints` instead), the form-view
-xpaths are the same, and the manifest version becomes `18.0.0.1.0`. `graph_client.py` and the
+xpaths are the same, and the manifest version becomes `18.0.0.2.0`. `graph_client.py` and the
 `mail.mail` retry logic would be unchanged. Untested — contributions welcome.
 
 ## Development
