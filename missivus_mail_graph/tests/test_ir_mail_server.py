@@ -6,12 +6,20 @@ from email.parser import BytesParser
 from unittest.mock import patch
 
 from odoo.addons.base.models.ir_mail_server import MailDeliveryException
-from odoo.exceptions import ValidationError
+from odoo.exceptions import UserError, ValidationError
 from odoo.tests import TransactionCase
 
 from ..graph_client import TransientDeliveryError
 from ..models.ir_mail_server import MissivusGraphSession, pending_transient
-from .common import ACCEPTED, SENDER, GraphPostMock, create_graph_server, graph_error, token_ok
+from .common import (
+    ACCEPTED,
+    SENDER,
+    GraphPostMock,
+    create_graph_server,
+    graph_error,
+    token_error,
+    token_ok,
+)
 
 
 class TestMailServerConfig(TransactionCase):
@@ -190,3 +198,36 @@ class TestGraphSend(TransactionCase):
         with patch("smtplib.SMTP", side_effect=OSError("no network in tests")):
             with self.assertRaises(OSError):
                 self.IrMailServer._connect__(mail_server_id=smtp.id, smtp_from="x@example.com")
+
+
+class TestConnectionButton(TransactionCase):
+    def setUp(self):
+        super().setUp()
+        self.server = create_graph_server(self.env)
+
+    def test_success_acquires_token_only_and_never_sends(self):
+        with GraphPostMock(token_ok()) as post:
+            action = self.server.test_smtp_connection()
+        self.assertEqual(len(post.token_calls), 1)
+        self.assertEqual(post.send_calls, [])
+        self.assertEqual(action["tag"], "display_notification")
+        self.assertEqual(action["params"]["type"], "success")
+        self.assertIn("real send", action["params"]["message"])
+
+    def test_failure_reports_aad_description(self):
+        with GraphPostMock(token_error()):
+            with self.assertRaises(UserError) as cm:
+                self.server.test_smtp_connection()
+        self.assertIn("AADSTS7000215", str(cm.exception))
+        self.assertNotIn(self.server.missivus_client_secret, str(cm.exception))
+
+    def test_bypasses_cache(self):
+        with GraphPostMock(token_ok(), token_ok()) as post:
+            self.server.test_smtp_connection()
+            self.server.test_smtp_connection()
+        self.assertEqual(len(post.token_calls), 2)
+
+    def test_detect_max_size_sets_graph_limit(self):
+        with GraphPostMock(token_ok()):
+            self.server.action_retrieve_max_email_size()
+        self.assertEqual(self.server.max_email_size, 3.0)

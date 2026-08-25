@@ -9,11 +9,11 @@ from odoo.addons.base.models.ir_mail_server import (
     MailDeliveryException,
     extract_rfc2822_addresses,
 )
-from odoo.exceptions import ValidationError
+from odoo.exceptions import UserError, ValidationError
 from odoo.tools import email_normalize
 
 from .. import graph_client
-from ..graph_client import PermanentDeliveryError, TransientDeliveryError
+from ..graph_client import GraphError, PermanentDeliveryError, TransientDeliveryError
 
 _logger = logging.getLogger(__name__)
 _test_logger = logging.getLogger("odoo.tests")
@@ -238,3 +238,55 @@ class IrMailServer(models.Model):
             _logger.info(msg)
             raise MailDeliveryException(_("Mail Delivery Failed"), msg) from exc
         return message["Message-Id"]
+
+    # ------------------------------------------------------------------
+    # Test Connection button
+    # ------------------------------------------------------------------
+    def test_smtp_connection(self, autodetect_max_email_size=False):
+        graph = self.filtered(lambda s: s.smtp_authentication == MISSIVUS_GRAPH)
+        others = self - graph
+        result = None
+        if others:
+            result = super(IrMailServer, others).test_smtp_connection(autodetect_max_email_size)
+        if not graph:
+            return result
+        for server in graph.sudo():
+            try:
+                # force_refresh: the button must prove the credentials as saved, not a cached token
+                graph_client.get_token(
+                    server.missivus_tenant_id,
+                    server.missivus_client_id,
+                    server.missivus_client_secret,
+                    force_refresh=True,
+                )
+            except GraphError as exc:
+                raise UserError(
+                    _(
+                        "Microsoft Entra did not issue a token for '%(server)s'.\n%(error)s",
+                        server=server.name,
+                        error=exc,
+                    )
+                ) from exc
+            if autodetect_max_email_size:
+                server.max_email_size = GRAPH_MAX_EMAIL_MB
+        if autodetect_max_email_size:
+            message = _(
+                "Email maximum size set to %(size)s MB: Microsoft Graph accepts sendMail requests "
+                "up to 4 MB, so larger attachments are sent as links.",
+                size=GRAPH_MAX_EMAIL_MB,
+            )
+        else:
+            message = _(
+                "Token acquired from Microsoft Entra. Whether the shared mailbox and the access "
+                "policy are right is only proven by a real send: this test never sends mail."
+            )
+        return {
+            "type": "ir.actions.client",
+            "tag": "display_notification",
+            "params": {
+                "message": message,
+                "type": "success",
+                "sticky": False,
+                "next": {"type": "ir.actions.act_window_close"},
+            },
+        }
