@@ -4,7 +4,7 @@ All notable changes to Missivus for Odoo. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [0.1.0] — Unreleased
+## [0.1.0] — 2026-08-25
 
 First release. The fifth Missivus platform, after
 [Matomo](https://github.com/Solvetus/missivus-matomo),
@@ -24,3 +24,5 @@ First release. The fifth Missivus platform, after
 - "Test Connection" acquires a token and reports the Microsoft Entra error description.
 - `from_filter` pinned to the sender mailbox on save so Odoo's standard routing picks the server.
 - Docker Compose dev environment, ruff + Odoo test suite in GitHub Actions.
+
+[0.1.0]: https://github.com/Solvetus/missivus-odoo/releases/tag/v0.1.0
