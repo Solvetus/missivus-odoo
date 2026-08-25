@@ -179,10 +179,10 @@ class TestGraphSend(TransactionCase):
         with GraphPostMock(token_ok(), later):
             with self.assertRaises(TransientDeliveryError):
                 self.IrMailServer.send_email(msg, mail_server_id=self.server.id)
+        self.addCleanup(setattr, pending_transient, "error", None)
         parked = pending_transient.error
         self.assertEqual(parked.message_id, msg["Message-Id"])
         self.assertEqual(parked.retry_after, 30)
-        pending_transient.error = None
 
     def test_oversized_message_is_permanent(self):
         big = [("big.bin", b"x" * (3 * 1024 * 1024 + 1), "application/octet-stream")]
@@ -192,6 +192,18 @@ class TestGraphSend(TransactionCase):
             )
         self.assertIn("message too large for Graph sendMail; reduce attachments", str(cm.exception))
         self.assertEqual(post.send_calls, [])
+
+    def test_forced_server_wins_over_smtp_arguments(self):
+        session = self.IrMailServer._connect__(
+            host="smtp.example.net", mail_server_id=self.server.id, smtp_from=SENDER
+        )
+        self.assertIsInstance(session, MissivusGraphSession)
+
+    def test_archived_graph_server_refuses_to_send(self):
+        self.server.active = False
+        with GraphPostMock() as post, self.assertRaises(UserError):
+            self.IrMailServer.send_email(self._message(), mail_server_id=self.server.id)
+        self.assertEqual(post.calls, [])
 
     def test_smtp_server_path_untouched(self):
         smtp = self.env["ir.mail_server"].create({"name": "smtp", "smtp_host": "mail.example.com"})
@@ -230,4 +242,4 @@ class TestConnectionButton(TransactionCase):
     def test_detect_max_size_sets_graph_limit(self):
         with GraphPostMock(token_ok()):
             self.server.action_retrieve_max_email_size()
-        self.assertEqual(self.server.max_email_size, 3.0)
+        self.assertEqual(self.server.max_email_size, 2.5)

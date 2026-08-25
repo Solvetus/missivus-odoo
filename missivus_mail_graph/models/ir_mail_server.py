@@ -19,7 +19,9 @@ _logger = logging.getLogger(__name__)
 _test_logger = logging.getLogger("odoo.tests")
 
 MISSIVUS_GRAPH = "missivus_graph"
-GRAPH_MAX_EMAIL_MB = 3.0  # keep Odoo's attachment-to-link threshold under Graph's 4 MB request cap
+# Odoo's attachment-to-link threshold. Odoo estimates the pre-serialization size; the raw MIME
+# is base64-encoded once more for Graph's 4 MB request cap, so leave ~25 % headroom.
+GRAPH_MAX_EMAIL_MB = 2.5
 
 # The TransientDeliveryError raised by the last Graph send on this thread. mail.mail's
 # _postprocess_sent_message reads and clears it to re-queue the mail (see models/mail_mail.py).
@@ -114,15 +116,21 @@ class IrMailServer(models.Model):
     # ------------------------------------------------------------------
     # Session + send path
     # ------------------------------------------------------------------
-    def _missivus_graph_session(self, mail_server_id, smtp_from):
-        """Return a MissivusGraphSession when the server handling `smtp_from` is a Graph server."""
+    def _missivus_graph_session(self, mail_server_id, smtp_from, allow_archived=False):
+        """Return a MissivusGraphSession when the server handling `smtp_from` is a Graph server.
+
+        A forced server (mail_server_id) goes through the same checks core applies in
+        _connect__, so an archived Graph server refuses to send.
+        """
         if mail_server_id:
             server = self.sudo().browse(mail_server_id)
         else:
             server, smtp_from = self.sudo()._find_mail_server(smtp_from)
-        if server and server.smtp_authentication == MISSIVUS_GRAPH:
-            return MissivusGraphSession(server, smtp_from)
-        return None
+        if not server or server.smtp_authentication != MISSIVUS_GRAPH:
+            return None
+        if mail_server_id:
+            self._check_forced_mail_server(server, allow_archived, smtp_from)
+        return MissivusGraphSession(server, smtp_from)
 
     def _connect__(
         self,
@@ -138,11 +146,10 @@ class IrMailServer(models.Model):
         mail_server_id=None,
         allow_archived=False,
     ):
-        if not host:
-            session = self._missivus_graph_session(mail_server_id, smtp_from)
+        # Same precedence as core: an explicit mail_server_id wins over smtp_* arguments.
+        if mail_server_id or not host:
+            session = self._missivus_graph_session(mail_server_id, smtp_from, allow_archived)
             if session:
-                if mail_server_id:
-                    self._check_forced_mail_server(session.server, allow_archived, smtp_from)
                 return session
         return super()._connect__(
             host=host,
@@ -174,7 +181,7 @@ class IrMailServer(models.Model):
         smtp_session=None,
     ):
         session = smtp_session
-        if session is None and not smtp_server:
+        if session is None and (mail_server_id or not smtp_server):
             session = self._missivus_graph_session(mail_server_id, message["From"])
         if isinstance(session, MissivusGraphSession):
             return self._missivus_send_email(message, session)

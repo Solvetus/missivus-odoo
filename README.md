@@ -180,8 +180,9 @@ still says Granted, wait and run it again. Finish with `Disconnect-ExchangeOnlin
    **Emails**: the record should be *Sent*. If it is *Delivery Failed*, the *Failure Reason*
    holds the Graph error code and message verbatim.
 6. **Optional — Detect Max Limit.** On the server form, **Detect Max Limit** sets *Convert
-   attachments to links for emails over* to 3 MB, so heavy attachments become download links
-   instead of hitting Graph's 4 MB request cap.
+   attachments to links for emails over* to 2.5 MB, so heavy attachments become download
+   links instead of hitting Graph's 4 MB request cap (Odoo measures the message before the
+   extra base64 pass Graph needs, hence the headroom).
 
 ## When it does not work
 
