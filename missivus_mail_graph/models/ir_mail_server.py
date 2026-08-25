@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Solvetus
 # SPDX-License-Identifier: LGPL-3.0-or-later
 import logging
-import re
 import threading
 
 from odoo import _, api, fields, models
@@ -9,16 +8,14 @@ from odoo.addons.base.models.ir_mail_server import (
     MailDeliveryException,
     extract_rfc2822_addresses,
 )
-from odoo.exceptions import UserError, ValidationError
-from odoo.tools import email_normalize
 
 from .. import graph_client
-from ..graph_client import GraphError, PermanentDeliveryError, TransientDeliveryError
+from ..graph_client import PermanentDeliveryError, TransientDeliveryError
+from .missivus_graph_mixin import MISSIVUS_GRAPH, REQUIRED_GRAPH_FIELDS
 
 _logger = logging.getLogger(__name__)
 _test_logger = logging.getLogger("odoo.tests")
 
-MISSIVUS_GRAPH = "missivus_graph"
 # Odoo's attachment-to-link threshold. Odoo estimates the pre-serialization size; the raw MIME
 # is base64-encoded once more for Graph's 4 MB request cap, so leave ~25 % headroom.
 GRAPH_MAX_EMAIL_MB = 2.5
@@ -26,15 +23,6 @@ GRAPH_MAX_EMAIL_MB = 2.5
 # The TransientDeliveryError raised by the last Graph send on this thread. mail.mail's
 # _postprocess_sent_message reads and clears it to re-queue the mail (see models/mail_mail.py).
 pending_transient = threading.local()
-
-EMAIL_SHAPE = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
-
-REQUIRED_GRAPH_FIELDS = (
-    ("missivus_tenant_id", "Directory (tenant) ID"),
-    ("missivus_client_id", "Application (client) ID"),
-    ("missivus_client_secret", "Client secret"),
-    ("missivus_sender", "Shared mailbox"),
-)
 
 
 class MissivusGraphSession:
@@ -57,15 +45,13 @@ class MissivusGraphSession:
 
 
 class IrMailServer(models.Model):
-    _inherit = "ir.mail_server"
+    _name = "ir.mail_server"
+    _inherit = ["ir.mail_server", "missivus.graph.mixin"]
 
     smtp_authentication = fields.Selection(
         selection_add=[(MISSIVUS_GRAPH, "Missivus — Microsoft Graph")],
         ondelete={MISSIVUS_GRAPH: "set default"},
     )
-    missivus_tenant_id = fields.Char("Directory (tenant) ID", groups="base.group_system")
-    missivus_client_id = fields.Char("Application (client) ID", groups="base.group_system")
-    missivus_client_secret = fields.Char("Client secret", groups="base.group_system")
     missivus_sender = fields.Char(
         "Shared mailbox",
         help="Address of the shared mailbox the app is allowed to send as, e.g. "
@@ -87,15 +73,7 @@ class IrMailServer(models.Model):
 
     @api.constrains("smtp_authentication", *(name for name, _label in REQUIRED_GRAPH_FIELDS))
     def _check_missivus_graph(self):
-        for server in self.filtered(lambda s: s.smtp_authentication == MISSIVUS_GRAPH).sudo():
-            missing = [label for name, label in REQUIRED_GRAPH_FIELDS if not server[name]]
-            if missing:
-                raise ValidationError(_("Missivus — Microsoft Graph needs: %s", ", ".join(missing)))
-            sender = server.missivus_sender.strip()
-            if not EMAIL_SHAPE.fullmatch(sender) or not email_normalize(sender):
-                raise ValidationError(
-                    _("'%s' is not a valid email address for the shared mailbox.", sender)
-                )
+        self.filtered(lambda s: s.smtp_authentication == MISSIVUS_GRAPH)._missivus_check_config()
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -257,36 +235,16 @@ class IrMailServer(models.Model):
             result = super(IrMailServer, others).test_smtp_connection(autodetect_max_email_size)
         if not graph:
             return result
-        for server in graph.sudo():
-            try:
-                # force_refresh: the button must prove the credentials as saved, not a cached token
-                graph_client.get_token(
-                    server.missivus_tenant_id,
-                    server.missivus_client_id,
-                    server.missivus_client_secret,
-                    force_refresh=True,
-                )
-            except GraphError as exc:
-                raise UserError(
-                    _(
-                        "Microsoft Entra did not issue a token for '%(server)s'.\n%(error)s",
-                        server=server.name,
-                        error=exc,
-                    )
-                ) from exc
-            if autodetect_max_email_size:
-                server.max_email_size = GRAPH_MAX_EMAIL_MB
+        graph._missivus_test_token()
         if autodetect_max_email_size:
+            graph.sudo().write({"max_email_size": GRAPH_MAX_EMAIL_MB})
             message = _(
                 "Email maximum size set to %(size)s MB: Microsoft Graph accepts sendMail requests "
                 "up to 4 MB, so larger attachments are sent as links.",
                 size=GRAPH_MAX_EMAIL_MB,
             )
         else:
-            message = _(
-                "Token acquired from Microsoft Entra. Whether the shared mailbox and the access "
-                "policy are right is only proven by a real send: this test never sends mail."
-            )
+            message = self._missivus_token_ok_message()
         return {
             "type": "ir.actions.client",
             "tag": "display_notification",
