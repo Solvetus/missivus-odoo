@@ -12,7 +12,7 @@
     "website": "https://missivus.com",
     "license": "LGPL-3",
     "depends": ["base", "mail"],
-    "data": [],
+    "data": ["views/ir_mail_server_views.xml"],
     "installable": True,
     "application": False,
 }

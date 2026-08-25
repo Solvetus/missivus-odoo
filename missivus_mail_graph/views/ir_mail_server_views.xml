@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+SPDX-FileCopyrightText: 2026 Solvetus
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
+<odoo>
+    <record id="ir_mail_server_view_form_missivus" model="ir.ui.view">
+        <field name="name">ir.mail_server.view.form.inherit.missivus_mail_graph</field>
+        <field name="model">ir.mail_server</field>
+        <field name="inherit_id" ref="base.ir_mail_server_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='from_filter']" position="attributes">
+                <attribute name="readonly">smtp_authentication == 'missivus_graph'</attribute>
+                <attribute name="force_save">1</attribute>
+            </xpath>
+            <xpath expr="//field[@name='smtp_host']" position="attributes">
+                <attribute name="required">smtp_authentication not in ('cli', 'missivus_graph')</attribute>
+            </xpath>
+            <xpath expr="//field[@name='smtp_port']" position="attributes">
+                <attribute name="required">smtp_authentication not in ('cli', 'missivus_graph')</attribute>
+            </xpath>
+            <xpath expr="//notebook" position="attributes">
+                <attribute name="invisible">smtp_authentication in ('cli', 'missivus_graph')</attribute>
+            </xpath>
+            <xpath expr="//notebook" position="before">
+                <group name="missivus_graph" string="Microsoft Graph"
+                       invisible="smtp_authentication != 'missivus_graph'">
+                    <group>
+                        <field name="missivus_tenant_id"
+                               required="smtp_authentication == 'missivus_graph'"
+                               placeholder="00000000-0000-0000-0000-000000000000"/>
+                        <field name="missivus_client_id"
+                               required="smtp_authentication == 'missivus_graph'"
+                               placeholder="00000000-0000-0000-0000-000000000000"/>
+                    </group>
+                    <group>
+                        <field name="missivus_client_secret" password="True"
+                               required="smtp_authentication == 'missivus_graph'"/>
+                        <field name="missivus_sender"
+                               required="smtp_authentication == 'missivus_graph'"
+                               placeholder="noreply@example.com"/>
+                    </group>
+                </group>
+            </xpath>
+        </field>
+    </record>
+</odoo>
