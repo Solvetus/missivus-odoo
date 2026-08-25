@@ -4,8 +4,8 @@
 
 # Missivus for Odoo
 
-**Send all outgoing Odoo mail through Microsoft Graph with application permissions and a shared
-mailbox. No SMTP, no user login, no pip dependencies. Free, LGPLv3.**
+**Send and receive Odoo mail through Microsoft Graph with application permissions and shared
+mailboxes. No SMTP, no IMAP, no user login, no pip dependencies. Free, LGPLv3.**
 
 ## The problem
 
@@ -50,6 +50,9 @@ person. This is the fifth member of the Missivus family — after
   (400, 403, 404) fail immediately with the Graph error code and message.
 - *Test Connection* proves the credentials by acquiring a token and shows Microsoft's own error
   description when it cannot.
+- Adds **Missivus — Microsoft Graph** as a server type on Incoming Mail Servers: fetches unread
+  mail from a shared mailbox and hands it to Odoo's native mail gateway — aliases, catchall,
+  threading and bounces work as with IMAP, without IMAP. See [Inbound mail](#inbound-mail).
 
 ## What you need
 
@@ -78,19 +81,31 @@ This is the identity Odoo will use. It is not a user and has no password anyone 
 6. On the Overview page copy the **Application (client) ID** and the **Directory (tenant) ID**.
    You will paste both into Odoo.
 
-### Part 2 — Grant the permission to send mail
+### Part 2 — Grant the permissions to send and read mail
 
 1. Still inside your app registration, choose **API permissions** in the left-hand menu.
 2. Click **+ Add a permission**, then **Microsoft Graph**.
 3. Choose **Application permissions**. This is the important choice — *not* "Delegated
    permissions". Application permissions belong to the app itself, which is why no human ever has
    to sign in.
-4. In the search box type `Mail.Send`, tick **Mail.Send**, click **Add permissions**.
+4. In the search box type `Mail.Send`, tick **Mail.Send**; then type `Mail.ReadWrite`, tick
+   **Mail.ReadWrite**. Click **Add permissions**.
 5. Back on the API permissions page click **✓ Grant admin consent for <your organisation>**,
    then **Yes**. Confirm the Status column now reads **Granted** with a green tick.
 
 > If the "Grant admin consent" button is greyed out, your account cannot consent. Ask a Global
 > Administrator to click it. Nothing else in this guide requires their involvement.
+
+> **Why `Mail.ReadWrite` and not `Mail.Read`.** Inbound fetching marks messages as read (or
+> moves them) once Odoo has processed them — that is what stops the same message being imported
+> twice — and moves messages Odoo cannot process into a quarantine folder. Both are writes. A
+> read-only degraded mode is deliberately not offered: without the write, every run would
+> re-import the same mail. If you only send, `Mail.Send` alone is still enough.
+>
+> **The access policy applies to reading too.** The application access policy from Part 5
+> restricts *every* Graph mailbox call the app makes, so the mailbox you fetch from must be a
+> member of the security group that policy points at — the same group as your sending mailbox,
+> or add the fetched mailbox to it. Group names are yours; nothing in this addon depends on them.
 
 You may also see **User.Read** listed as a delegated permission. Azure adds it automatically to
 new registrations. Missivus does not use it and you can safely remove it.
@@ -183,6 +198,70 @@ still says Granted, wait and run it again. Finish with `Disconnect-ExchangeOnlin
    attachments to links for emails over* to 2.5 MB, so heavy attachments become download
    links instead of hitting Graph's 4 MB request cap (Odoo measures the message before the
    extra base64 pass Graph needs, hence the headroom).
+
+## Inbound mail
+
+Odoo's mail gateway turns incoming mail into records and chatter replies: `sales@` creates leads,
+`support@` creates tickets, replies land on the right thread, bounces are recognised. Odoo
+normally fetches that mail over IMAP. Missivus fetches it over Graph instead, with the same app
+registration as the outbound side, and hands each message to the very same Odoo code path.
+
+**What it does, per cron run (every 5 minutes by default):** resolve the folder → list up to
+*Messages per run* unread messages → for each: download the raw MIME, give it to Odoo's
+`message_process` exactly as the IMAP fetcher would, and — only if Odoo accepted it — mark it as
+read or move it. Messages that are still unread at the end of a run are picked up by the next one.
+
+### Set-up
+
+1. Make sure the app has **Mail.ReadWrite** (application) with admin consent — Part 2 — and that
+   the mailbox you will fetch from is covered by the access policy — Part 5. Wait for
+   `Test-ApplicationAccessPolicy -Identity "inbox@example.com" -AppId "…"` to say **Granted**.
+2. Settings → Technical → Email → **Incoming Mail Servers** → New:
+   - *Server Type*: **Missivus — Microsoft Graph**
+   - *Directory (tenant) ID*, *Application (client) ID*, *Client secret*: as for the outgoing server
+   - *Shared mailbox*: the mailbox to fetch from, e.g. `inbox@example.com` (a shared mailbox, no
+     licence)
+   - *Folder*: `inbox` (default). Well-known names (`inbox`, `archive`, `junkemail`) or the exact
+     display name of any folder.
+   - *After processing*: **Mark as read** (default) or **Move to folder** with a folder name
+     (created if missing).
+   - *Messages per run*: 50 by default.
+   - *Create a New Record*: optional, like any incoming server — the model to create when no alias
+     matches.
+3. **Test & Confirm.** Acquires a token with the saved credentials and confirms the server. It
+   never reads the mailbox: whether the policy covers this mailbox is proven by the first run.
+4. **Fetch Now** on the confirmed server, then check Technical → Email → *Messages* or the target
+   model's chatter. The *Advanced* tab shows the last error, if any.
+
+### Post-processing modes
+
+| Mode | After Odoo processed a message | Use when |
+| --- | --- | --- |
+| Mark as read | The message stays in the folder, read | You want a searchable archive in the mailbox itself |
+| Move to folder | The message goes to the named folder (created on first use) | You want the inbox to hold only what Odoo has not seen |
+
+Either way nothing is touched until Odoo has accepted the message, and Odoo ignores a message
+whose `Message-Id` it already imported — so a run that is interrupted between processing and
+post-processing cannot create duplicates.
+
+### Quarantine
+
+A message Odoo cannot process — malformed MIME, an exception in a `message_new` override, a
+record that fails validation — is moved to the **Missivus Quarantine** folder in the same mailbox
+(created on first use), *whatever the post-processing mode*, and logged at ERROR level with its
+Graph message id and the exception class. The message body is never logged. The run continues
+with the remaining messages. If the quarantine move itself fails, the message is left where it is
+and retried on the next run.
+
+Transient Graph or network errors (429, 5xx, timeouts) abort the run cleanly: whatever was not
+processed stays unread for the next run, and the server's *Last Error* shows the cause. After five
+days of continuous failure Odoo sets the server back to *Not Confirmed*, exactly as it does for IMAP.
+
+### Batch cap
+
+*Messages per run* bounds one cron run. A backlog of 10,000 messages drains at 50 per run, i.e.
+50 every five minutes with the default cron — raise the cap or the cron frequency for a one-off
+migration, then put them back.
 
 ## When it does not work
 
