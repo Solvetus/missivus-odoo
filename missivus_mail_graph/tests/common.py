@@ -74,6 +74,7 @@ class GraphPostMock:
 
     def __exit__(self, *exc):
         self._patcher.stop()
+        graph_client.clear_token_cache()
         return False
 
     @property
