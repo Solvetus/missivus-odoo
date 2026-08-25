@@ -4,7 +4,7 @@ All notable changes to Missivus for Odoo. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [1.0.0] — Unreleased
+## [0.1.0] — Unreleased
 
 First release. The fifth Missivus platform, after
 [Matomo](https://github.com/Solvetus/missivus-matomo),

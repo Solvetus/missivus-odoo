@@ -6,7 +6,7 @@
         "Send all outgoing mail through Microsoft Graph with application permissions "
         "and a shared mailbox. No SMTP, no user login."
     ),
-    "version": "19.0.1.0.0",
+    "version": "19.0.0.1.0",
     "category": "Technical",
     "author": "Solvetus",
     "website": "https://missivus.com",
