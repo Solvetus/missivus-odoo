@@ -47,6 +47,60 @@ class TestTransientRetry(TransactionCase):
         self.assertIn("ServiceUnavailable", mail.failure_reason)
 
     @mute_logger(MAIL_LOGGER)
+    def test_requeue_wakes_the_mail_cron(self):
+        cron = self.env.ref("mail.ir_cron_mail_scheduler_action")
+        Trigger = self.env["ir.cron.trigger"]
+        before = Trigger.search_count([("cron_id", "=", cron.id)])
+        mail = self._mail()
+        with GraphPostMock(token_ok(), graph_error(503, "ServiceUnavailable", "later")):
+            mail.send()
+        triggers = Trigger.search([("cron_id", "=", cron.id)], order="id desc")
+        self.assertEqual(len(triggers), before + 1)
+        self.assertAlmostEqual(
+            triggers[0].call_at,
+            mail.scheduled_date + timedelta(seconds=59),
+            delta=timedelta(seconds=5),
+        )
+
+    @mute_logger(MAIL_LOGGER)
+    def test_requeue_resets_notifications_to_ready(self):
+        partner = self.env["res.partner"].create({"name": "Ann", "email": "ann@example.org"})
+        mail = self._mail(email_to=False, recipient_ids=[(6, 0, partner.ids)])
+        notification = self.env["mail.notification"].create(
+            {
+                "mail_mail_id": mail.id,
+                "mail_message_id": mail.mail_message_id.id,
+                "res_partner_id": partner.id,
+                "notification_type": "email",
+                "notification_status": "ready",
+            }
+        )
+        with GraphPostMock(token_ok(), graph_error(503, "ServiceUnavailable", "later")):
+            mail.send()
+        self.assertEqual(mail.state, "outgoing")
+        self.assertEqual(notification.notification_status, "ready")
+        self.assertFalse(notification.failure_type)
+
+    @mute_logger(MAIL_LOGGER)
+    def test_partial_delivery_is_not_replayed(self):
+        partners = self.env["res.partner"].create(
+            [
+                {"name": "A", "email": "a@example.org"},
+                {"name": "B", "email": "b@example.org"},
+            ]
+        )
+        mail = self._mail(email_to=False, recipient_ids=[(6, 0, partners.ids)])
+        # first recipient accepted, second hits a transient error
+        with GraphPostMock(
+            token_ok(), ACCEPTED, graph_error(503, "ServiceUnavailable", "later")
+        ) as post:
+            mail.send()
+        self.assertEqual(len(post.send_calls), 2)
+        self.assertEqual(mail.state, "exception")
+        self.assertEqual(mail.missivus_retry_count, 0)
+        self.assertFalse(mail.scheduled_date)
+
+    @mute_logger(MAIL_LOGGER)
     def test_backoff_progression(self):
         for count, minutes in ((1, 4), (2, 8), (3, 16), (4, 32)):
             with self.subTest(count=count):

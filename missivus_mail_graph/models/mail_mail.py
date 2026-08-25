@@ -34,6 +34,10 @@ class MailMail(models.Model):
         if error is None:
             return res
         pending_transient.error = None
+        if success_pids or success_emails:
+            # Part of this mail already went out: replaying it would deliver duplicates.
+            # Leave it in exception for a human, exactly like SMTP does.
+            return res
         transient = self.filtered(
             lambda m: m.state == "exception" and m.message_id == error.message_id
         )
@@ -48,12 +52,24 @@ class MailMail(models.Model):
                 continue
             attempt = mail.missivus_retry_count + 1
             delay = error.retry_after or BACKOFF_MINUTES[attempt - 1] * 60
+            scheduled = fields.Datetime.now() + timedelta(seconds=delay)
             mail.write(
                 {
                     "state": "outgoing",
-                    "scheduled_date": fields.Datetime.now() + timedelta(seconds=delay),
+                    "scheduled_date": scheduled,
                     "missivus_retry_count": attempt,
                 }
+            )
+            # Core just flagged the notifications as failed; the mail is only delayed.
+            self.env["mail.notification"].sudo().search(
+                [("mail_mail_id", "=", mail.id), ("notification_status", "=", "exception")]
+            ).write(
+                {"notification_status": "ready", "failure_type": False, "failure_reason": False}
+            )
+            # The mail cron runs hourly by default: wake it when the retry is due (as core does
+            # for its own delayed batches).
+            self.env.ref("mail.ir_cron_mail_scheduler_action")._trigger(
+                scheduled + timedelta(seconds=59)
             )
             _logger.info(
                 "mail.mail %s: transient Graph failure, retry %s/%s in %ss",
