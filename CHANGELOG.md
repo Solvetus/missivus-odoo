@@ -4,7 +4,7 @@ All notable changes to Missivus for Odoo. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [0.2.0] — Unreleased
+## [0.2.0] — 2026-08-26
 
 Inbound mail. The addon is now the complete mail story for Odoo 19 Community on Microsoft 365:
 send and receive through Microsoft Graph with application permissions and shared mailboxes.
@@ -57,3 +57,4 @@ First release. The fifth Missivus platform, after
 - Docker Compose dev environment, ruff + Odoo test suite in GitHub Actions.
 
 [0.1.0]: https://github.com/Solvetus/missivus-odoo/releases/tag/v0.1.0
+[0.2.0]: https://github.com/Solvetus/missivus-odoo/releases/tag/v0.2.0
