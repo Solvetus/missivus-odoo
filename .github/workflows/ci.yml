@@ -15,10 +15,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/ruff-action@v3
-        with:
-          args: check .
-      - run: ruff format --check .
+      # ruff from PyPI via pipx, not a third-party action. The version is pinned on purpose: bump it deliberately.
+      - run: pipx run ruff==0.17.6 check .
+      - run: pipx run ruff==0.17.6 format --check .
 
   test:
     runs-on: ubuntu-latest
